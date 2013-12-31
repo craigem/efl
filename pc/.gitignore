@@ -57,4 +57,8 @@
 /ecore-cxx.pc
 /edje-cxx.pc
 /ecore-audio-cxx.pc
+<<<<<<< HEAD
 /efl.pc
+=======
+/emile.pc
+>>>>>>> emile: initial introduction of Emile.
