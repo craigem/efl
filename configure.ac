@@ -1093,6 +1093,8 @@ EFL_LIB_START([Eet])
 
 ### Checks for libraries
 
+EFL_CHECK_LIBS([EET], [libjpeg])
+
 ## Compatibility layers
 EFL_PLATFORM_DEPEND([EET], [evil])
 
@@ -1104,8 +1106,6 @@ if test "$build_crypto" != "none" ; then
    AC_DEFINE([HAVE_SIGNATURE], [1], [Have signature support for eet file])
    EFL_CRYPTO_DEPEND([EET])
 fi
-
-EFL_CHECK_LIBS([EET], [libjpeg zlib])
 
 EFL_INTERNAL_DEPEND_PKG([EET], [eina])
 EFL_INTERNAL_DEPEND_PKG([EET], [emile])
