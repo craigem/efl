@@ -1,0 +1,14 @@
+class Efl::Text {
+   properties {
+      text {
+      }
+      text2 {
+      }
+      text_size {
+      }
+   }
+   methods {
+      text_markup_set {
+      }
+   }
+}

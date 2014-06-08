@@ -82,6 +82,7 @@ _eolian_gen_execute(const char *eo_filename, const char *options, const char *ou
    snprintf(command, PATH_MAX,
          "%s %s -I "PACKAGE_DATA_DIR"/data -o %s %s",
          eolian_gen_path, options, output_filename, eo_filename);
+   printf("Execute %s\n", command);
    return system(command);
 }
 
@@ -106,8 +107,25 @@ START_TEST(eolian_dev_impl_code)
 }
 END_TEST
 
+START_TEST(eolian_class_func_names_merge)
+{
+   char output_filepath[PATH_MAX] = "";
+   snprintf(output_filepath, PATH_MAX, "%s/class_func_names_merge.c",
+#ifdef HAVE_EVIL
+         (char *)evil_tmpdir_get()
+#else
+         "/tmp"
+#endif
+         );
+   remove(output_filepath);
+   fail_if(0 != _eolian_gen_execute(PACKAGE_DATA_DIR"/data/efl_text.eo", "--eo --legacy --gc", output_filepath));
+   fail_if(!_files_compare(PACKAGE_DATA_DIR"/data/class_func_names_merge_ref.c", output_filepath));
+}
+END_TEST
+
 void eolian_generation_test(TCase *tc)
 {
    tcase_add_test(tc, eolian_dev_impl_code);
+   tcase_add_test(tc, eolian_class_func_names_merge);
 }
 

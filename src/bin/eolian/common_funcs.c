@@ -53,6 +53,8 @@ _class_func_env_create(const Eolian_Class class, const char *funcname, Eolian_Fu
    char *p;
    const char *suffix = "";
    const char *legacy = NULL;
+   int str_len;
+   Eina_Bool reduce = EINA_FALSE;
    Eolian_Function funcid = eolian_class_function_find_by_name(class, funcname, ftype);
    if (ftype == EOLIAN_PROP_GET)
      {
@@ -72,10 +74,31 @@ _class_func_env_create(const Eolian_Class class, const char *funcname, Eolian_Fu
    p = strncpy(env->upper_func, funcname, PATH_MAX - 1);
    eina_str_toupper(&p);
 
-   sprintf(p = env->upper_eo_func, "%s_%s%s", tmp_env.upper_eo_prefix, funcname, suffix);
+   str_len = strlen(eolian_class_name_get(class));
+   if (!strncasecmp(eolian_class_name_get(class), funcname, str_len))
+     {
+        char end_func = *(funcname + str_len);
+        switch (end_func)
+          {
+           case '_':
+                {
+                   reduce = EINA_TRUE;
+                   funcname += (str_len + 0); /* Don't take the '_' */
+                   break;
+                }
+           case '\0':
+                {
+                   reduce = EINA_TRUE;
+                   funcname += str_len;
+                   break;
+                }
+           default: break;
+          }
+     }
+   sprintf(p = env->upper_eo_func, "%s%s%s%s", tmp_env.upper_eo_prefix, reduce?"":"_", funcname, suffix);
    eina_str_toupper(&p);
 
-   sprintf(p = env->lower_eo_func, "%s_%s%s", tmp_env.lower_eo_prefix, funcname, suffix);
+   sprintf(p = env->lower_eo_func, "%s%s%s%s", tmp_env.lower_eo_prefix, reduce?"":"_", funcname, suffix);
    eina_str_tolower(&p);
 
    env->legacy_func[0] = '\0';
@@ -89,7 +112,7 @@ _class_func_env_create(const Eolian_Class class, const char *funcname, Eolian_Fu
    legacy = eolian_class_legacy_prefix_get(class);
    if (legacy && !strcmp(legacy, "null")) goto end;
 
-   sprintf(env->legacy_func, "%s_%s%s", legacy?legacy:tmp_env.lower_classname, funcname, suffix);
+   sprintf(env->legacy_func, "%s%s%s%s", legacy?legacy:tmp_env.lower_classname, reduce?"":"_", funcname, suffix);
 
 end:
    return;
