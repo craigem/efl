@@ -9,6 +9,23 @@ class Ctor_Dtor (Base) {
       custom_constructor_2 {
       }
    }
+   properties {
+      timeout {
+         constructor;
+      }
+      text {
+      }
+   }
+   methods {
+      timeout_configure {
+         constructor;
+         params {
+            @in int timeout;
+         }
+      }
+      timeout_clear {
+      }
+   }
    implements {
       class::constructor;
       class::destructor;

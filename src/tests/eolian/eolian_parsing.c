@@ -182,6 +182,7 @@ START_TEST(eolian_ctor_dtor)
    const Eina_List *impls = NULL;
    Eolian_Class impl_class = NULL;
    Eolian_Function impl_func = NULL;
+   Eolian_Function func = NULL;
    Eolian_Class class, base;
 
    eolian_init();
@@ -210,6 +211,18 @@ START_TEST(eolian_ctor_dtor)
    fail_if(!eolian_class_function_find_by_name(base, "destructor", EOLIAN_METHOD));
    fail_if(!eolian_class_function_find_by_name(class, "custom_constructor_1", EOLIAN_CTOR));
    fail_if(!eolian_class_function_find_by_name(class, "custom_constructor_2", EOLIAN_CTOR));
+
+   /* Methods set as constructors */
+   fail_if(!(func = eolian_class_function_find_by_name(class, "timeout_configure", EOLIAN_METHOD)));
+   fail_if(!eolian_function_is_ctor(func));
+   fail_if(!(func = eolian_class_function_find_by_name(class, "timeout_clear", EOLIAN_METHOD)));
+   fail_if(eolian_function_is_ctor(func));
+
+   /* Properties set as constructors */
+   fail_if(!(func = eolian_class_function_find_by_name(class, "timeout", EOLIAN_PROPERTY)));
+   fail_if(!eolian_function_is_ctor(func));
+   fail_if(!(func = eolian_class_function_find_by_name(class, "text", EOLIAN_PROPERTY)));
+   fail_if(eolian_function_is_ctor(func));
 
    eolian_shutdown();
 }

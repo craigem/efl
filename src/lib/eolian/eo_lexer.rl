@@ -614,10 +614,18 @@ _eo_tokenizer_implement_get(Eo_Tokenizer *toknz, char *p)
       fgoto tokenize_properties;
    }
 
+   action end_prop_as_ctor{
+      if (!toknz->tmp.prop) ABORT(toknz, "No property!!!");
+      toknz->tmp.prop->is_ctor = EINA_TRUE;
+      INF("        constructor");
+   }
+
    prop_get = 'get' ignore* begin_def;
    prop_set = 'set' ignore* begin_def;
    prop_keys = 'keys' ignore* begin_def;
    prop_values = 'values' ignore* begin_def;
+
+   prop_as_ctor = 'constructor' %end_prop_as_ctor end_statement;
 
    tokenize_property := |*
       ignore+;    #=> show_ignore;
@@ -626,6 +634,7 @@ _eo_tokenizer_implement_get(Eo_Tokenizer *toknz, char *p)
       prop_set    => begin_property_set;
       prop_keys   => begin_property_keys;
       prop_values => begin_property_values;
+      prop_as_ctor;
       end_def     => end_property;
       any         => show_error;
       *|;
@@ -710,6 +719,12 @@ _eo_tokenizer_implement_get(Eo_Tokenizer *toknz, char *p)
       INF("        obj const");
    }
 
+   action end_method_as_ctor{
+      if (!toknz->tmp.meth) ABORT(toknz, "No method!!!");
+      toknz->tmp.meth->is_ctor = EINA_TRUE;
+      INF("        constructor");
+   }
+
    action end_method {
       Eina_List **l = NULL;
       if (!toknz->tmp.meth) ABORT(toknz, "No method!!!");
@@ -741,6 +756,8 @@ _eo_tokenizer_implement_get(Eo_Tokenizer *toknz, char *p)
 
    meth_obj_const = 'const' %end_method_obj_const end_statement;
 
+   meth_as_ctor = 'constructor' %end_method_as_ctor end_statement;
+
    tokenize_method := |*
       ignore+;    #=> show_ignore;
       eo_comment  => end_method_comment;
@@ -749,6 +766,7 @@ _eo_tokenizer_implement_get(Eo_Tokenizer *toknz, char *p)
       meth_rettype;
       meth_legacy;
       meth_obj_const;
+      meth_as_ctor;
       end_def     => end_method;
       any         => show_error;
       *|;
@@ -1196,6 +1214,7 @@ eo_tokenizer_dump(Eo_Tokenizer *toknz)
                          accessor->comment);
                   printf("      legacy : %s\n", accessor->legacy);
                }
+             printf("    is_ctor : %s\n", prop->is_ctor?"true":"false");
           }
 
         EINA_LIST_FOREACH(kls->methods, l, meth)
@@ -1205,6 +1224,7 @@ eo_tokenizer_dump(Eo_Tokenizer *toknz)
                 printf("    return: %s (%s)\n", meth->ret->type, meth->ret->comment);
              printf("    legacy : %s\n", meth->legacy);
              printf("    obj_const : %s\n", meth->obj_const?"true":"false");
+             printf("    is_ctor : %s\n", meth->is_ctor?"true":"false");
              EINA_LIST_FOREACH(meth->params, m, param)
                {
                   printf("    param: %s %s : %s (%s)\n",
@@ -1435,6 +1455,7 @@ eo_tokenizer_database_fill(const char *filename)
           {
              Eolian_Function foo_id = database_function_new(prop->name, EOLIAN_UNRESOLVED);
              database_function_scope_set(foo_id, prop->scope);
+             database_function_set_as_ctor(foo_id, prop->is_ctor);
              EINA_LIST_FOREACH(prop->keys, m, param)
                {
                   Eolian_Type type = _types_extract(param->type, strlen(param->type));
@@ -1512,6 +1533,7 @@ eo_tokenizer_database_fill(const char *filename)
              database_function_description_set(foo_id, EOLIAN_COMMENT, meth->comment);
              database_function_data_set(foo_id, EOLIAN_LEGACY, meth->legacy);
              database_function_object_set_as_const(foo_id, meth->obj_const);
+             database_function_set_as_ctor(foo_id, meth->is_ctor);
              EINA_LIST_FOREACH(meth->params, m, param)
                {
                   Eolian_Type type = _types_extract(param->type, strlen(param->type));

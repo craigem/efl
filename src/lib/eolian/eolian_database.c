@@ -57,6 +57,7 @@ typedef struct
    Eolian_Type set_ret_type;
    Eina_Hash *data;
    Eina_Bool obj_is_const :1; /* True if the object has to be const. Useful for a few methods. */
+   Eina_Bool is_ctor :1; /* True if the function should be used as constructor. */
    Eina_Bool get_virtual_pure :1;
    Eina_Bool set_virtual_pure :1;
    Eina_Bool get_return_warn_unused :1; /* also used for methods */
@@ -1036,6 +1037,22 @@ eolian_function_object_is_const(Eolian_Function foo_id)
    _Function_Id *fid = (_Function_Id *)foo_id;
    EINA_SAFETY_ON_NULL_RETURN_VAL(fid, EINA_FALSE);
    return fid->obj_is_const;
+}
+
+void
+database_function_set_as_ctor(Eolian_Function foo_id, Eina_Bool is_ctor)
+{
+   _Function_Id *fid = (_Function_Id *)foo_id;
+   EINA_SAFETY_ON_NULL_RETURN(fid);
+   fid->is_ctor = is_ctor;
+}
+
+EAPI Eina_Bool
+eolian_function_is_ctor(Eolian_Function foo_id)
+{
+   _Function_Id *fid = (_Function_Id *)foo_id;
+   EINA_SAFETY_ON_NULL_RETURN_VAL(fid, EINA_FALSE);
+   return fid->is_ctor;
 }
 
 Eolian_Event

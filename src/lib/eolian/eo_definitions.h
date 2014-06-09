@@ -66,6 +66,7 @@ typedef struct _eo_property_def
    Eina_List *values;
    Eina_List *accessors;
    int scope;
+   Eina_Bool is_ctor;
 } Eo_Property_Def;
 
 /* METHOD */
@@ -86,6 +87,7 @@ typedef struct _eo_method_def
    Eina_List *params;
    const char* legacy;
    Eina_Bool obj_const;
+   Eina_Bool is_ctor;
    int scope;
 } Eo_Method_Def;
 

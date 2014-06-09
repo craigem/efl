@@ -606,6 +606,16 @@ EAPI Eina_Bool eolian_function_return_is_warn_unused(Eolian_Function foo_id, Eol
 EAPI Eina_Bool eolian_function_object_is_const(Eolian_Function function_id);
 
 /*
+ * @brief Indicates if a function can be used as constructor.
+ *
+ * @param[in] function_id id of the function
+ * @return EINA_TRUE if the function is a constructor, EINA_FALSE otherwise
+ *
+ * @ingroup Eolian
+ */
+EAPI Eina_Bool eolian_function_is_ctor(Eolian_Function function_id);
+
+/*
  * @brief Get full string of an overriding function (implement).
  *
  * @param[in] impl handle of the implement

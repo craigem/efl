@@ -108,6 +108,8 @@ void database_function_return_flag_set_as_warn_unused(Eolian_Function foo_id,
 
 void database_function_object_set_as_const(Eolian_Function foo_id, Eina_Bool is_const);
 
+void database_function_set_as_ctor(Eolian_Function foo_id, Eina_Bool is_ctor);
+
 Eina_Bool
 database_function_set_as_virtual_pure(Eolian_Function function_id, Eolian_Function_Type type);
 
