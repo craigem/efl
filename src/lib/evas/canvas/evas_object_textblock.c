@@ -268,6 +268,19 @@ struct _Evas_Object_Style_Tag
    Evas_Object_Style_Tag_Base tag;
 };
 
+typedef enum
+{
+   EVAS_OBJECT_TEXTBLOCK_DIRTY_NONE = 0,
+   EVAS_OBJECT_TEXTBLOCK_DIRTY_DEFAULT = 0x1,
+   EVAS_OBJECT_TEXTBLOCK_DIRTY_ADD = 0x2
+} Evas_Object_Textblock_Dirty_State;
+
+typedef struct _Evas_Object_Textblock_Dirty_Info
+{
+   size_t pos; /* position in text node where change has been made */
+   size_t len; /* length of added text */
+}Evas_Object_Textblock_Dirty_Info;
+
 struct _Evas_Object_Textblock_Node_Text
 {
    EINA_INLIST;
@@ -275,7 +288,8 @@ struct _Evas_Object_Textblock_Node_Text
    char                               *utf8;
    Evas_Object_Textblock_Node_Format  *format_node;
    Evas_Object_Textblock_Paragraph    *par;
-   Eina_Bool                           dirty : 1;
+   Evas_Object_Textblock_Dirty_State   dirty : 3;
+   Evas_Object_Textblock_Dirty_Info    dirty_info;
    Eina_Bool                           is_new : 1;
 };
 
@@ -470,6 +484,18 @@ struct _Evas_Textblock_Cursor
    Evas_Object_Textblock_Node_Text *node;
 };
 
+typedef enum {
+   EVAS_OBJECT_TEXTBLOCK_STATE_NONE,
+   EVAS_OBJECT_TEXTBLOCK_STATE_SET,
+   EVAS_OBJECT_TEXTBLOCK_STATE_APPEND
+} Evas_Object_Textblock_State;
+
+#define _STATE_SET(o, s) \
+   do { \
+      if (o->state == EVAS_OBJECT_TEXTBLOCK_STATE_NONE) o->state = s; \
+   }while(0)
+
+
 /* Size of the index array */
 #define TEXTBLOCK_PAR_INDEX_SIZE 10
 struct _Evas_Object_Textblock
@@ -499,6 +525,7 @@ struct _Evas_Object_Textblock
    void                               *engine_data;
    const char                         *repch;
    const char                         *bidi_delimiters;
+   Evas_Object_Textblock_State         state;
    struct {
       int                              w, h, oneline_h;
       Eina_Bool                        valid : 1;
@@ -5153,7 +5180,7 @@ _layout_pre(Ctxt *c, int *style_pad_l, int *style_pad_r, int *style_pad_t,
 
                   /* If it's dirty, remove and recreate, if it's clean,
                    * skip to the next. */
-                  if (n->dirty)
+                  if (n->dirty == EVAS_OBJECT_TEXTBLOCK_DIRTY_DEFAULT)
                     {
                        Evas_Object_Textblock_Paragraph *prev_par = c->par;
 
@@ -5163,6 +5190,15 @@ _layout_pre(Ctxt *c, int *style_pad_l, int *style_pad_r, int *style_pad_t,
                           eina_inlist_remove(EINA_INLIST_GET(c->paragraphs),
                                 EINA_INLIST_GET(prev_par));
                        _paragraph_free(eo_obj, prev_par);
+                    }
+                  else if (n->dirty == EVAS_OBJECT_TEXTBLOCK_DIRTY_ADD)
+                    {
+                       /* Get information about added text (same script)
+                        * and update the affected items */
+
+                       /* continue to next node. Adding text shouldn't affect
+                        * most of the things */
+                       continue;
                     }
                   else
                     {
@@ -5371,6 +5407,7 @@ _layout(const Evas_Object *eo_obj, int w, int h, int *w_ret, int *h_ret)
      {
         if (w_ret) *w_ret = 0;
         if (h_ret) *h_ret = 0;
+        _STATE_SET(o, EVAS_OBJECT_TEXTBLOCK_STATE_NONE);
         return;
      }
 
@@ -5476,6 +5513,8 @@ _layout(const Evas_Object *eo_obj, int w, int h, int *w_ret, int *h_ret)
              par->y += adjustment;
           }
      }
+
+   _STATE_SET(o, EVAS_OBJECT_TEXTBLOCK_STATE_NONE);
 
    if ((o->style_pad.l != style_pad_l) || (o->style_pad.r != style_pad_r) ||
        (o->style_pad.t != style_pad_t) || (o->style_pad.b != style_pad_b))
@@ -6214,6 +6253,8 @@ _evas_textblock_text_markup_set(Eo *eo_obj EINA_UNUSED, Evas_Textblock_Data *o, 
      }
 
    _nodes_clear(eo_obj);
+
+   _STATE_SET(o, EVAS_OBJECT_TEXTBLOCK_STATE_SET);
 
    o->cursor->node = _evas_textblock_node_text_new();
    o->text_nodes = _NODE_TEXT(eina_inlist_append(
