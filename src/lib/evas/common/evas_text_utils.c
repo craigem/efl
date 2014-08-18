@@ -568,6 +568,116 @@ evas_common_text_props_content_create(void *_fi, const Eina_Unicode *text,
    return EINA_TRUE;
 }
 
+#ifdef OT_SUPPORT
+static inline void
+_content_update_ot(RGBA_Font_Int *fi, const Eina_Unicode *text,
+      Evas_Text_Props *text_props, int pos, int len, Evas_Text_Props_Mode mode)
+{
+   size_t char_index;
+   Evas_Font_Glyph_Info *gl_itr;
+   Evas_Coord pen_x = 0, adjust_x = 0;
+
+   evas_common_font_ot_update_text_props(text, text_props, len, pos, mode);
+
+   gl_itr = text_props->info->glyph + text_props->start;
+   for (char_index = text_props->start;
+         char_index < (text_props->start +
+         (size_t)text_props->len) ; char_index++)
+     {
+        FT_UInt idx;
+        RGBA_Font_Glyph *fg;
+        Eina_Bool is_replacement = EINA_FALSE;
+        /* If we got a malformed index, show the replacement char instead */
+        if (gl_itr->index == 0)
+          {
+             gl_itr->index = evas_common_get_char_index(fi, REPLACEMENT_CHAR);
+             is_replacement = EINA_TRUE;
+          }
+        idx = gl_itr->index;
+        LKL(fi->ft_mutex);
+        fg = evas_common_font_int_cache_glyph_get(fi, idx);
+        if (!fg)
+          {
+             LKU(fi->ft_mutex);
+             continue;
+          }
+        LKU(fi->ft_mutex);
+
+        gl_itr->x_bear = fg->x_bear;
+        gl_itr->y_bear = fg->y_bear;
+        gl_itr->width = fg->width;
+        /* text_props->info->glyph[char_index].advance =
+         * text_props->info->glyph[char_index].index =
+         * already done by the ot function */
+        if (EVAS_FONT_CHARACTER_IS_INVISIBLE(
+              text[text_props->info->ot[char_index].source_cluster]))
+          {
+             gl_itr->index = 0;
+             /* Reduce the current advance */
+             if (gl_itr > text_props->info->glyph)
+               {
+                  adjust_x -= gl_itr->pen_after - (gl_itr - 1)->pen_after;
+               }
+             else
+               {
+                  adjust_x -= gl_itr->pen_after;
+               }
+          }
+        else
+          {
+             if (is_replacement)
+               {
+                  /* Update the advance accordingly */
+                  adjust_x += (pen_x + (fg->glyph->advance.x >> 16)) -
+                     gl_itr->pen_after;
+               }
+             pen_x = gl_itr->pen_after;
+          }
+        gl_itr->pen_after += adjust_x;
+
+        fi = text_props->font_instance;
+        gl_itr++;
+     }
+}
+#endif
+/* don't unref text props. don't recreate stuff. just update */
+EAPI Eina_Bool
+evas_common_text_props_content_update(void *_fi, const Eina_Unicode *text,
+      Evas_Text_Props *text_props, int pos, int len,
+      Evas_Text_Props_Mode mode)
+{
+   RGBA_Font_Int *fi = (RGBA_Font_Int *) _fi;
+
+   if (text_props->font_instance != fi)
+     {
+        if (text_props->font_instance)
+          evas_common_font_int_unref(text_props->font_instance);
+        text_props->font_instance = fi;
+        fi->references++;
+     }
+
+   evas_common_font_int_reload(fi);
+   if (fi->src->current_size != fi->size)
+     {
+        evas_common_font_source_reload(fi->src);
+        FTLOCK();
+        FT_Activate_Size(fi->ft.size);
+        FTUNLOCK();
+        fi->src->current_size = fi->size;
+     }
+   text_props->changed = EINA_TRUE;
+
+   //just OT (harfbuzz) for now. Add ifdefs later
+   _content_update_ot(fi, text, text_props, pos, len, mode);
+
+   /* invalidate glyphs */
+   //if (text_props->glyphs) evas_common_font_glyphs_unref(text_props->glyphs);
+   //text_props->glyphs = NULL;
+
+   text_props->text_len += len;
+
+   return EINA_TRUE;
+}
 
 /**
  * @internal

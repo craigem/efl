@@ -2103,6 +2103,13 @@ eng_font_text_props_info_create(void *data EINA_UNUSED, Evas_Font_Instance *fi, 
          text_props, par_props, par_pos, len, mode);
 }
 
+static Eina_Bool
+eng_font_text_props_info_update(void *data EINA_UNUSED, Evas_Font_Instance *fi, const Eina_Unicode *text, Evas_Text_Props *text_props, int pos, size_t len, Evas_Text_Props_Mode mode)
+{
+   return evas_common_text_props_content_update((RGBA_Font_Int *) fi, text,
+         text_props, pos, len, mode);
+}
+
 static int
 eng_font_char_coords_get(void *data EINA_UNUSED, Evas_Font_Set *font, const Evas_Text_Props *text_props, int pos, int *cx, int *cy, int *cw, int *ch)
 {
@@ -2987,6 +2994,7 @@ static Evas_Func func =
      NULL, // eng_image_content_hint_get - software doesn't use it
      eng_font_pen_coords_get,
      eng_font_text_props_info_create,
+     eng_font_text_props_info_update,
      eng_font_right_inset_get,
      NULL, // need software mesa for gl rendering <- gl_surface_create
      NULL, // need software mesa for gl rendering <- gl_surface_destroy

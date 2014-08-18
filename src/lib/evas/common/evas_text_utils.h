@@ -99,6 +99,7 @@ struct _Evas_Text_Props_Info
 {
    Evas_Font_Glyph_Info *glyph; // 8/4
    Evas_Font_OT_Info *ot; // 8/4
+   int len; // 8/4
    unsigned int refcount; // 4
 };
 
@@ -158,6 +159,11 @@ EAPI Eina_Bool
 evas_common_text_props_content_create(void *_fi, const Eina_Unicode *text,
       Evas_Text_Props *text_props, const Evas_BiDi_Paragraph_Props *par_props,
       size_t par_pos, int len, Evas_Text_Props_Mode mode);
+
+EAPI Eina_Bool
+evas_common_text_props_content_update(void *_fi, const Eina_Unicode *text,
+      Evas_Text_Props *text_props,
+      int pos, int len, Evas_Text_Props_Mode mode);
 
 void
 evas_common_text_props_content_copy_and_ref(Evas_Text_Props *dst,
