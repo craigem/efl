@@ -5135,6 +5135,131 @@ _layout_split_text_because_format(const Evas_Object_Textblock_Format *fmt,
    return EINA_FALSE;
 }
 
+static Evas_Object_Textblock_Item *
+_layout_find_item_node_match(Evas_Object_Textblock_Node_Text *n, size_t pos)
+{
+   Evas_Object_Textblock_Item *itr, *pitr = NULL;
+   Eina_List *list, *l;
+   list = n->par->logical_items;
+   pitr = eina_list_data_get(list); //first item can't be visually-deleted
+   list = eina_list_next(list);
+   EINA_LIST_FOREACH(list, l, itr)
+     {
+        if (itr->visually_deleted)
+           continue;
+        if (itr->text_pos > pos)
+           return pitr;
+        pitr = itr;
+     }
+   return pitr;
+}
+
+/* Updates text props info of all items that follow the current item 'it' */
+static void
+_update_items_with_same_info(Evas_Object_Textblock_Paragraph *par,
+      Evas_Object_Textblock_Item *it, int goff, int toff)
+{
+   Eina_List *items, *i;
+   Evas_Object_Textblock_Item *itr;
+
+   /* First, go update all split items that follow 'it' i.e. items that have the
+    * same glyph information */
+   items = eina_list_data_find_list(par->logical_items, it)->next;
+   EINA_LIST_FOREACH(items, i, itr)
+     {
+        /* check if we've gone through all split items */
+        if (!itr->merge)
+           break;
+
+        itr->text_pos += toff;
+        Evas_Object_Textblock_Text_Item *ti;
+        if (itr->type == EVAS_TEXTBLOCK_ITEM_TEXT)
+          {
+             ti = _ITEM_TEXT(itr);
+
+             /* Sanity */
+             if (ti->text_props.info != _ITEM_TEXT(it)->text_props.info)
+               {
+                  ERR("Updating split items' text props, but current"
+                        "item does not have same glyph info.");
+                  break;
+               }
+
+             ti->text_props.start += goff;
+             ti->text_props.changed = EINA_TRUE;
+             ti->text_props.text_offset += toff;
+          }
+     }
+
+   /* Second, update following items (not splits of 'it') */
+   items = i;
+   EINA_LIST_FOREACH(items, i, itr)
+     {
+        itr->text_pos += toff;
+        Evas_Object_Textblock_Text_Item *ti;
+        if (itr->type == EVAS_TEXTBLOCK_ITEM_TEXT)
+          {
+             ti = _ITEM_TEXT(itr);
+
+             /* note that the difference here from the previous loop is that
+              * we don't update 'start' field, as this is for items
+              * that have not been changed */
+             ti->text_props.changed = EINA_TRUE;
+             ti->text_props.text_offset += toff;
+          }
+     }
+
+}
+
+/* updates text item corresponsing to position off in n */
+static Eina_Bool
+_layout_pre_text_update(Ctxt *c, Evas_Object_Textblock_Node_Text *n)
+{
+   Eina_Unicode *str;
+   Evas_Object_Protected_Data *obj = eo_data_scope_get(c->obj, EVAS_OBJECT_CLASS);
+   Evas_Object_Textblock_Item *it;
+   Evas_Object_Textblock_Text_Item *ti = NULL;
+   int prev_glen;
+
+   //str = eina_unicode_strndup(
+   //      eina_ustrbuf_string_get(n->unicode) + n->dirty_info.pos,
+   //      n->dirty_info.len);
+   /* must be text item because this is called only for handling cases of
+    * dirty text items */
+   it = _layout_find_item_node_match(n, n->dirty_info.pos);
+
+   if (it && (it->type != EVAS_TEXTBLOCK_ITEM_TEXT))
+     {
+        /* prev item shouldn't be null since n->unicode is not empty string */
+        it = _ITEM(EINA_INLIST_GET(it)->prev);
+     }
+   //TODO: obviously this needs to be expanded to handle all item types
+   ti = _ITEM_TEXT(it);
+   if (!ti->text_props.font_instance)
+      return EINA_FALSE;
+
+   /* get that string in the text node matching the item */
+   str = eina_unicode_strdup(
+         eina_ustrbuf_string_get(n->unicode));
+
+   prev_glen = ti->text_props.len;
+   //TODO: call text_props_info_update with required arguments
+   ENFN->font_text_props_info_update(ENDT,
+         ti->text_props.font_instance, str, &ti->text_props,
+         ti->text_props.text_offset, n->dirty_info.len, EVAS_TEXT_PROPS_MODE_SHAPE);
+
+   free(str);
+
+   /* update indices for next items that share the same glyph info */
+   _update_items_with_same_info(c->par, it, ti->text_props.len - prev_glen,
+         n->dirty_info.len);
+
+   _text_item_update_sizes(c, ti);
+
+   return EINA_TRUE;
+}
+
+
 /** FIXME: Document */
 static void
 _layout_pre(Ctxt *c, int *style_pad_l, int *style_pad_r, int *style_pad_t,
@@ -5178,6 +5303,25 @@ _layout_pre(Ctxt *c, int *style_pad_l, int *style_pad_r, int *style_pad_t,
                        c->par = tmp_par;
                     }
 
+                  if (n->dirty == EVAS_OBJECT_TEXTBLOCK_DIRTY_ADD)
+                    {
+                       /* Get information about added text (same script)
+                        * and update the affected items */
+
+                       /* continue to next node. Adding text shouldn't affect
+                        * most of the things */
+                      if ( _layout_pre_text_update(c, n))
+                        {
+                           _paragraph_clear(eo_obj, c->par);
+                           c->par = (Evas_Object_Textblock_Paragraph *)
+                              EINA_INLIST_GET(c->par)->next;
+                           continue;
+                        }
+                    }
+                  /* This is the regular non-optimized section */
+                  o->state = EVAS_OBJECT_TEXTBLOCK_STATE_NONE;
+                  n->dirty = EVAS_OBJECT_TEXTBLOCK_DIRTY_DEFAULT;
+
                   /* If it's dirty, remove and recreate, if it's clean,
                    * skip to the next. */
                   if (n->dirty == EVAS_OBJECT_TEXTBLOCK_DIRTY_DEFAULT)
@@ -5189,16 +5333,7 @@ _layout_pre(Ctxt *c, int *style_pad_l, int *style_pad_r, int *style_pad_t,
                        c->paragraphs = (Evas_Object_Textblock_Paragraph *)
                           eina_inlist_remove(EINA_INLIST_GET(c->paragraphs),
                                 EINA_INLIST_GET(prev_par));
-                       _paragraph_free(eo_obj, prev_par);
-                    }
-                  else if (n->dirty == EVAS_OBJECT_TEXTBLOCK_DIRTY_ADD)
-                    {
-                       /* Get information about added text (same script)
-                        * and update the affected items */
-
-                       /* continue to next node. Adding text shouldn't affect
-                        * most of the things */
-                       continue;
+                    _paragraph_free(eo_obj, prev_par);
                     }
                   else
                     {
@@ -5215,7 +5350,7 @@ _layout_pre(Ctxt *c, int *style_pad_l, int *style_pad_r, int *style_pad_t,
                               {
                                  int pl = 0, pr = 0, pt = 0, pb = 0;
                                  _layout_do_format(eo_obj, c, &c->fmt, fnode,
-                                                   &pl, &pr, &pt, &pb, EINA_FALSE);
+                                       &pl, &pr, &pt, &pb, EINA_FALSE);
                                  fnode->pad.l = pl;
                                  fnode->pad.r = pr;
                                  fnode->pad.t = pt;
@@ -5407,7 +5542,7 @@ _layout(const Evas_Object *eo_obj, int w, int h, int *w_ret, int *h_ret)
      {
         if (w_ret) *w_ret = 0;
         if (h_ret) *h_ret = 0;
-        _STATE_SET(o, EVAS_OBJECT_TEXTBLOCK_STATE_NONE);
+        o->state = EVAS_OBJECT_TEXTBLOCK_STATE_NONE;
         return;
      }
 
@@ -5514,7 +5649,7 @@ _layout(const Evas_Object *eo_obj, int w, int h, int *w_ret, int *h_ret)
           }
      }
 
-   _STATE_SET(o, EVAS_OBJECT_TEXTBLOCK_STATE_NONE);
+   o->state = EVAS_OBJECT_TEXTBLOCK_STATE_NONE;
 
    if ((o->style_pad.l != style_pad_l) || (o->style_pad.r != style_pad_r) ||
        (o->style_pad.t != style_pad_t) || (o->style_pad.b != style_pad_b))
@@ -8415,6 +8550,7 @@ evas_textblock_cursor_text_append(Evas_Textblock_Cursor *cur, const char *_text)
    Evas_Object_Textblock_Node_Format *fnode = NULL;
    Eina_Unicode *text;
    int len = 0;
+   Eina_Bool was_empty = EINA_FALSE;
 
    if (!cur) return 0;
    text = eina_unicode_utf8_to_unicode(_text, &len);
@@ -8463,6 +8599,10 @@ evas_textblock_cursor_text_append(Evas_Textblock_Cursor *cur, const char *_text)
         cur->node = n;
      }
 
+   if (eina_ustrbuf_length_get(n->unicode) == 0)
+     {
+        was_empty = EINA_TRUE;
+     }
    eina_ustrbuf_insert_length(n->unicode, text, len, cur->pos);
    /* Advance the formats */
    if (fnode && (fnode->text_node == cur->node))
@@ -8472,7 +8612,21 @@ evas_textblock_cursor_text_append(Evas_Textblock_Cursor *cur, const char *_text)
    _evas_textblock_cursors_update_offset(cur, cur->node, cur->pos, len);
 
    _evas_textblock_changed(o, cur->obj);
-   n->dirty = EINA_TRUE;
+   _STATE_SET(o, EVAS_OBJECT_TEXTBLOCK_STATE_APPEND);
+   if ((o->state == EVAS_OBJECT_TEXTBLOCK_STATE_APPEND) &&
+         !was_empty)
+     {
+        n->dirty = EVAS_OBJECT_TEXTBLOCK_DIRTY_ADD;
+        n->dirty_info.pos = cur->pos;
+        n->dirty_info.len = len;
+     }
+   else
+     {
+        /* n->dirty should be at DEFAULT, so let's just set
+         * o->state back to a proper value for consistency, even though
+         * it won't matter anywhere in the process */
+        o->state = EVAS_OBJECT_TEXTBLOCK_STATE_SET;
+     }
    free(text);
 
    if (!o->cursor->node)
