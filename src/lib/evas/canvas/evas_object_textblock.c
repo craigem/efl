@@ -289,7 +289,7 @@ struct _Evas_Object_Textblock_Node_Text
    Evas_Object_Textblock_Node_Format  *format_node;
    Evas_Object_Textblock_Paragraph    *par;
    Evas_Object_Textblock_Dirty_State   dirty : 3;
-   Evas_Object_Textblock_Dirty_Info    dirty_info;
+   Eina_List                          *dirty_info; //list of dirty regions
    Eina_Bool                           is_new : 1;
 };
 
@@ -5211,6 +5211,30 @@ _update_items_with_same_info(Evas_Object_Textblock_Paragraph *par,
 
 }
 
+/* Inserts new dirty information */
+static void
+_dirty_info_append(Evas_Object_Textblock_Node_Text *n, size_t pos, size_t len)
+{
+   Evas_Object_Textblock_Dirty_Info *info =
+      malloc(sizeof(Evas_Object_Textblock_Dirty_Info));
+   info->pos = pos;
+   info->len = len;
+
+   n->dirty_info = eina_list_append(n->dirty_info, info);
+}
+
+static void
+_dirty_info_free(Evas_Object_Textblock_Node_Text *n)
+{
+   Evas_Object_Textblock_Dirty_Info *info;
+
+   EINA_LIST_FREE(n->dirty_info, info)
+     {
+        free(info);
+     }
+   n->dirty_info = NULL;
+}
+
 /* updates text item corresponsing to position off in n */
 static Eina_Bool
 _layout_pre_text_update(Ctxt *c, Evas_Object_Textblock_Node_Text *n)
@@ -5220,43 +5244,52 @@ _layout_pre_text_update(Ctxt *c, Evas_Object_Textblock_Node_Text *n)
    Evas_Object_Textblock_Item *it;
    Evas_Object_Textblock_Text_Item *ti = NULL;
    int prev_glen;
+   Evas_Object_Textblock_Dirty_Info *info;
 
-   //str = eina_unicode_strndup(
-   //      eina_ustrbuf_string_get(n->unicode) + n->dirty_info.pos,
-   //      n->dirty_info.len);
-   /* must be text item because this is called only for handling cases of
-    * dirty text items */
-   it = _layout_find_item_node_match(n, n->dirty_info.pos);
-
-   if (it && (it->type != EVAS_TEXTBLOCK_ITEM_TEXT))
+   EINA_LIST_FREE(n->dirty_info, info)
      {
-        /* prev item shouldn't be null since n->unicode is not empty string */
-        it = _ITEM(EINA_INLIST_GET(it)->prev);
+        /* must be text item because this is called only for handling cases of
+         * dirty text items */
+        it = _layout_find_item_node_match(n, info->pos);
+
+        if (it && (it->type != EVAS_TEXTBLOCK_ITEM_TEXT))
+          {
+             /* prev item shouldn't be null since n->unicode is not empty string */
+             it = _ITEM(EINA_INLIST_GET(it)->prev);
+          }
+        //TODO: Might be ok but make sure we always have text items.
+        //Otherwise, handle other cases
+        ti = _ITEM_TEXT(it);
+
+        /* Should not happen, but let's leave it for the meantime */
+        if (!ti->text_props.font_instance)
+           goto error;
+
+        /* get that string in the text node matching the item */
+        str = eina_unicode_strdup(
+              eina_ustrbuf_string_get(n->unicode));
+
+        prev_glen = ti->text_props.len;
+        /* Update the affected item's glyph information */
+        ENFN->font_text_props_info_update(ENDT,
+              ti->text_props.font_instance, str, &ti->text_props,
+              ti->text_props.text_offset, info->len, EVAS_TEXT_PROPS_MODE_SHAPE);
+
+        free(str);
+
+        /* update indices for next items that share the same glyph info */
+        _update_items_with_same_info(c->par, it, ti->text_props.len - prev_glen,
+              info->len);
+
+        _text_item_update_sizes(c, ti);
      }
-   //TODO: obviously this needs to be expanded to handle all item types
-   ti = _ITEM_TEXT(it);
-   if (!ti->text_props.font_instance)
-      return EINA_FALSE;
-
-   /* get that string in the text node matching the item */
-   str = eina_unicode_strdup(
-         eina_ustrbuf_string_get(n->unicode));
-
-   prev_glen = ti->text_props.len;
-   //TODO: call text_props_info_update with required arguments
-   ENFN->font_text_props_info_update(ENDT,
-         ti->text_props.font_instance, str, &ti->text_props,
-         ti->text_props.text_offset, n->dirty_info.len, EVAS_TEXT_PROPS_MODE_SHAPE);
-
-   free(str);
-
-   /* update indices for next items that share the same glyph info */
-   _update_items_with_same_info(c->par, it, ti->text_props.len - prev_glen,
-         n->dirty_info.len);
-
-   _text_item_update_sizes(c, ti);
-
    return EINA_TRUE;
+
+error:
+   /* Again, code should not reach here, but adding this until it is
+    * stable enough */
+   _dirty_info_free(n);
+   return EINA_FALSE;
 }
 
 
@@ -8613,19 +8646,23 @@ evas_textblock_cursor_text_append(Evas_Textblock_Cursor *cur, const char *_text)
 
    _evas_textblock_changed(o, cur->obj);
    _STATE_SET(o, EVAS_OBJECT_TEXTBLOCK_STATE_APPEND);
+   /* check if we are allowed to append (i.e. caller function was NOT
+    * markup_set) */
    if ((o->state == EVAS_OBJECT_TEXTBLOCK_STATE_APPEND) &&
          !was_empty)
      {
         n->dirty = EVAS_OBJECT_TEXTBLOCK_DIRTY_ADD;
-        n->dirty_info.pos = cur->pos;
-        n->dirty_info.len = len;
+        _dirty_info_append(n, cur->pos, len);
      }
    else
      {
-        /* n->dirty should be at DEFAULT, so let's just set
+        /* n->dirty should be at DEFAULT if not ADD, so let's just set
          * o->state back to a proper value for consistency, even though
          * it won't matter anywhere in the process */
         o->state = EVAS_OBJECT_TEXTBLOCK_STATE_SET;
+
+        /* markup_set overrides all dirty info up to this point */
+        if (n->dirty_info) _dirty_info_free(n);
      }
    free(text);
 
