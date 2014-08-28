@@ -2104,7 +2104,7 @@ eng_font_text_props_info_create(void *data EINA_UNUSED, Evas_Font_Instance *fi, 
 }
 
 static Eina_Bool
-eng_font_text_props_info_update(void *data EINA_UNUSED, Evas_Font_Instance *fi, const Eina_Unicode *text, Evas_Text_Props *text_props, int pos, size_t len, Evas_Text_Props_Mode mode)
+eng_font_text_props_info_update(void *data EINA_UNUSED, Evas_Font_Instance *fi, const Eina_Unicode *text, Evas_Text_Props *text_props, size_t pos, size_t len, Evas_Text_Props_Mode mode)
 {
    return evas_common_text_props_content_update((RGBA_Font_Int *) fi, text,
          text_props, pos, len, mode);

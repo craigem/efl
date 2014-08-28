@@ -264,6 +264,63 @@ evas_common_text_props_index_find(const Evas_Text_Props *props, int _cutoff)
 #endif
 }
 
+#ifdef OT_SUPPORT
+/* Breaks the merge relation between two given text props
+ * (i.e. that share the same text info) */
+EAPI Eina_Bool
+evas_common_text_props_unmerge(Evas_Text_Props *props1,
+      Evas_Text_Props *props2)
+{
+   Evas_Text_Props_Info *info;
+   int len1, len2;
+   if (props1->info != props2->info)
+     {
+        ERR("Can't hard-split text props that don't share the same info");
+        return EINA_FALSE;
+     }
+   /* move info to a new space */
+   info = props1->info; //== props2->info
+   len2 = info->len - props2->start; //cropping out props1 info part
+   props2->info = malloc(sizeof(Evas_Text_Props_Info));
+   props2->info->glyph = malloc(len2 * sizeof(Evas_Font_Glyph_Info));
+   props2->info->ot = malloc(len2 * sizeof(Evas_Font_OT_Info));
+
+   memcpy(props2->info->glyph, info->glyph + props2->start, len2);
+   memcpy(props2->info->ot, info->ot + props2->start, len2);
+
+   props2->info->len = len2;
+   props2->info->refcount = info->refcount;
+
+   /* truncate props1->info */
+   len1 = props1->info->len = props1->info->len - len2;
+   props1->info->glyph = realloc(props1->info->glyph, len1);
+   props1->info->ot = realloc(props1->info->ot, len1);
+
+   props2->start = 0;
+   props2->text_offset = 0;
+
+   props1->changed = EINA_TRUE;
+   props2->changed = EINA_TRUE;
+
+   return EINA_TRUE;
+}
+
+/* Splits the text props and its info to two individuals.
+ * If props2->info is NULL, then create it (this means that there is no item
+ * that follows props1's item. Otherwise, props2->info is of that item */
+/* len is the length of the text */
+EAPI Eina_Bool
+evas_common_text_props_hard_split(Evas_Text_Props *props1,
+      Evas_Text_Props *props2, const Eina_Unicode *text, size_t len, size_t off, Evas_Text_Props_Mode mode)
+{
+   if (!props2->info)
+      props2->info = malloc(sizeof(Evas_Text_Props_Info));
+
+   evas_common_font_ot_hard_split_text_props(text, props1, len, off, props2, mode);
+
+   return EINA_TRUE;
+}
+#endif
 /* Won't work in the middle of ligatures, assumes cutoff < len.
  * Also won't work in the middle of indic words, should handle that in a
  * smart way. */
@@ -667,14 +724,14 @@ evas_common_text_props_content_update(void *_fi, const Eina_Unicode *text,
      }
    text_props->changed = EINA_TRUE;
 
-   //just OT (harfbuzz) for now. Add ifdefs later
+   /*just OT (harfbuzz) for now. */
    _content_update_ot(fi, text, text_props, pos, len, mode);
 
    /* invalidate glyphs */
    //if (text_props->glyphs) evas_common_font_glyphs_unref(text_props->glyphs);
    //text_props->glyphs = NULL;
 
-   text_props->text_len += len;
+   text_props->text_len = len;
 
    return EINA_TRUE;
 }

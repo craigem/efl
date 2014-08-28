@@ -266,6 +266,79 @@ _evas_common_font_ot_shape(hb_buffer_t *buffer, RGBA_Font_Int *fi, Evas_Text_Pro
      }
 }
 
+EAPI Eina_Bool
+evas_common_font_ot_populate_text_props(const Eina_Unicode *text,
+      Evas_Text_Props *props, int len, Evas_Text_Props_Mode mode)
+{
+   RGBA_Font_Int *fi;
+   hb_buffer_t *buffer;
+   hb_glyph_position_t *positions;
+   hb_glyph_info_t *infos;
+   int slen;
+   unsigned int i;
+   Evas_Font_Glyph_Info *gl_itr;
+   Evas_Font_OT_Info *ot_itr;
+   Evas_Coord pen_x = 0;
+
+   fi = props->font_instance;
+
+   if (len < 0)
+     {
+        slen = eina_unicode_strlen(text);
+     }
+   else
+     {
+        slen = len;
+     }
+
+   buffer = hb_buffer_create();
+   hb_buffer_set_unicode_funcs(buffer, _evas_common_font_ot_unicode_funcs_get());
+   hb_buffer_set_language(buffer, hb_language_from_string(
+            evas_common_language_from_locale_get(), -1));
+   hb_buffer_set_script(buffer, _evas_script_to_harfbuzz[props->script]);
+   hb_buffer_set_direction(buffer,
+         (props->bidi_dir == EVAS_BIDI_DIRECTION_RTL) ?
+         HB_DIRECTION_RTL : HB_DIRECTION_LTR);
+   /* FIXME: add run-time conversions if needed, which is very unlikely */
+   hb_buffer_add_utf32(buffer, (const uint32_t *) text, slen, 0, slen);
+
+   _evas_common_font_ot_shape(buffer, fi, mode);
+
+   /* info_len stores glyph information array's length
+    * (this is for handling split items) */
+   props->info->len = props->len = hb_buffer_get_length(buffer);
+   props->info->ot = calloc(props->len,
+         sizeof(Evas_Font_OT_Info));
+   props->info->glyph = calloc(props->len,
+              sizeof(Evas_Font_Glyph_Info));
+   positions = hb_buffer_get_glyph_positions(buffer, NULL);
+   infos = hb_buffer_get_glyph_infos(buffer, NULL);
+   gl_itr = props->info->glyph;
+   ot_itr = props->info->ot;
+   for (i = 0 ; i < props->len ; i++)
+     {
+        Evas_Coord adv;
+        ot_itr->source_cluster = infos->cluster;
+        ot_itr->x_offset = positions->x_offset;
+        ot_itr->y_offset = positions->y_offset;
+        gl_itr->index = infos->codepoint;
+        adv = positions->x_advance;
+
+        pen_x += adv;
+        gl_itr->pen_after = EVAS_FONT_ROUND_26_6_TO_INT(pen_x);
+
+        ot_itr++;
+        gl_itr++;
+        infos++;
+        positions++;
+     }
+
+   hb_buffer_destroy(buffer);
+   evas_common_font_int_use_trim();
+
+   return EINA_FALSE;
+}
+
 /* Like ot_populate, but instead just updates a specific range in the
  * glyph information for a single item
  */
@@ -301,7 +374,7 @@ evas_common_font_ot_update_text_props(const Eina_Unicode *text,
          HB_DIRECTION_RTL : HB_DIRECTION_LTR);
    /* reshape the item part in the unicode string */
    hb_buffer_add_utf32(buffer, (const uint32_t *) text, text_len,
-         props->text_offset, props->text_len + len); //offset and length of item in node's string
+         props->text_offset, len); //offset and length of item in node's string
    _evas_common_font_ot_shape(buffer, fi, mode);
 
    glen = hb_buffer_get_length(buffer); //get glyph length of text
@@ -395,7 +468,7 @@ evas_common_font_ot_update_text_props(const Eina_Unicode *text,
         /* rectify pen_after values */
         /* rectify cluster indices. The cluster of the next unaffected item
          * should be the same as the its position in text. */
-        clust_diff = len;
+        clust_diff = len - props->text_len;
         for (i = 0; i < (size_t)len2; i++)
           {
              /* rectify values */
@@ -412,30 +485,32 @@ evas_common_font_ot_update_text_props(const Eina_Unicode *text,
    return EINA_FALSE;
 }
 
+/* Splits the text props of an item into two individual text props.
+ * The provided text must be the text that is unchanged in the
+ * [0,text_offset - 1] and [text_offset + text_len, len] ranges.
+ * The first resultant part will end the info at the end of the props,
+ * and the second part will start where the props ends, and end at what's left.
+ */
 EAPI Eina_Bool
-evas_common_font_ot_populate_text_props(const Eina_Unicode *text,
-      Evas_Text_Props *props, int len, Evas_Text_Props_Mode mode)
+evas_common_font_ot_hard_split_text_props(const Eina_Unicode *text,
+      Evas_Text_Props *props, size_t len, int off, Evas_Text_Props *props2, Evas_Text_Props_Mode mode)
 {
-   RGBA_Font_Int *fi;
+   Evas_Font_Glyph_Info *glyph, *old_glyph;
+   Evas_Font_OT_Info *ot, *old_ot;
    hb_buffer_t *buffer;
+   size_t i;
+   int glen, added_info_len, info_len, old_info_len;
+   int info_diff;
+   int len1;
+   int info_len2, tlen2;
    hb_glyph_position_t *positions;
    hb_glyph_info_t *infos;
-   int slen;
-   unsigned int i;
    Evas_Font_Glyph_Info *gl_itr;
    Evas_Font_OT_Info *ot_itr;
    Evas_Coord pen_x = 0;
 
-   fi = props->font_instance;
 
-   if (len < 0)
-     {
-        slen = eina_unicode_strlen(text);
-     }
-   else
-     {
-        slen = len;
-     }
+   old_info_len = props->info->len;
 
    buffer = hb_buffer_create();
    hb_buffer_set_unicode_funcs(buffer, _evas_common_font_ot_unicode_funcs_get());
@@ -445,22 +520,80 @@ evas_common_font_ot_populate_text_props(const Eina_Unicode *text,
    hb_buffer_set_direction(buffer,
          (props->bidi_dir == EVAS_BIDI_DIRECTION_RTL) ?
          HB_DIRECTION_RTL : HB_DIRECTION_LTR);
-   /* FIXME: add run-time conversions if needed, which is very unlikely */
-   hb_buffer_add_utf32(buffer, (const uint32_t *) text, slen, 0, slen);
+   /* reshape the item part in the unicode string */
+   hb_buffer_add_utf32(buffer, (const uint32_t *) text, len,
+         props->text_offset, off); //offset and length of item in node's string
+   _evas_common_font_ot_shape(buffer, props->font_instance, mode);
 
-   _evas_common_font_ot_shape(buffer, fi, mode);
+   glen = hb_buffer_get_length(buffer); //get glyph length of text
+   /* truncate props info so it ends with the current item */
+   props->info->len += glen - (props->start + props->len);
+   props->len = glen;
 
-   /* info_len stores glyph information array's length
-    * (this is for handling split items) */
-   props->info->len = props->len = hb_buffer_get_length(buffer);
-   props->info->ot = calloc(props->len,
-         sizeof(Evas_Font_OT_Info));
-   props->info->glyph = calloc(props->len,
-              sizeof(Evas_Font_Glyph_Info));
+   old_glyph = props->info->glyph;
+   old_ot = props->info->ot;
+   props->info->glyph = malloc(props->info->len * sizeof(Evas_Font_Glyph_Info));
+   props->info->ot = malloc(props->info->len * sizeof(Evas_Font_Glyph_Info));
    positions = hb_buffer_get_glyph_positions(buffer, NULL);
    infos = hb_buffer_get_glyph_infos(buffer, NULL);
-   gl_itr = props->info->glyph;
-   ot_itr = props->info->ot;
+
+   /* copy all glyph info before this item */
+   if (props->start > 0)
+     {
+        memcpy(props->info->glyph, old_glyph, props->start * sizeof(Evas_Font_Glyph_Info));
+        memcpy(props->info->ot, old_ot, props->start * sizeof(Evas_Font_OT_Info));
+     }
+
+   gl_itr = props->info->glyph + props->start;
+   ot_itr = props->info->ot + props->start;
+   for (i = 0 ; i < props->len ; i++)
+     {
+        Evas_Coord adv;
+        ot_itr->source_cluster = infos->cluster;
+        ot_itr->x_offset = positions->x_offset;
+        ot_itr->y_offset = positions->y_offset;
+        gl_itr->index = infos->codepoint;
+        adv = positions->x_advance;
+
+        pen_x += adv;
+        gl_itr->pen_after = EVAS_FONT_ROUND_26_6_TO_INT(pen_x);
+
+        ot_itr++;
+        gl_itr++;
+        infos++;
+        positions++;
+     }
+   hb_buffer_destroy(buffer);
+
+
+   /* Second Part */
+   tlen2 = len - off - props->text_offset;
+   props2->info->len = old_info_len - (props->start + props->len);
+   buffer = hb_buffer_create();
+   hb_buffer_set_unicode_funcs(buffer, _evas_common_font_ot_unicode_funcs_get());
+   hb_buffer_set_language(buffer, hb_language_from_string(
+            evas_common_language_from_locale_get(), -1));
+   hb_buffer_set_script(buffer, _evas_script_to_harfbuzz[props->script]);
+   hb_buffer_set_direction(buffer,
+         (props->bidi_dir == EVAS_BIDI_DIRECTION_RTL) ?
+         HB_DIRECTION_RTL : HB_DIRECTION_LTR);
+   /* reshape the item part in the unicode string */
+   hb_buffer_add_utf32(buffer, (const uint32_t *) text, len,
+         props->text_offset + off, tlen2); //offset and length of item in node's string
+   _evas_common_font_ot_shape(buffer, props->font_instance, mode);
+
+   props2->info->glyph = malloc(props2->info->len * sizeof(Evas_Font_Glyph_Info));
+   props2->info->ot = malloc(props2->info->len * sizeof(Evas_Font_Glyph_Info));
+
+   glen = hb_buffer_get_length(buffer); //get glyph length of text
+   memcpy(props2->info->glyph, old_glyph + props->start + props->len, glen * sizeof(Evas_Font_Glyph_Info));
+   memcpy(props2->info->ot, old_ot + props->start + props->len, glen * sizeof(Evas_Font_OT_Info));
+
+   positions = hb_buffer_get_glyph_positions(buffer, NULL);
+   infos = hb_buffer_get_glyph_infos(buffer, NULL);
+
+   gl_itr = props2->info->glyph;
+   ot_itr = props2->info->ot;
    for (i = 0 ; i < props->len ; i++)
      {
         Evas_Coord adv;
@@ -480,9 +613,11 @@ evas_common_font_ot_populate_text_props(const Eina_Unicode *text,
      }
 
    hb_buffer_destroy(buffer);
-   evas_common_font_int_use_trim();
 
-   return EINA_FALSE;
+   free(old_glyph);
+   free(old_ot);
+
+   return EINA_TRUE;
 }
 
 #endif

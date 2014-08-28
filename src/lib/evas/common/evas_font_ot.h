@@ -39,5 +39,9 @@ evas_common_font_ot_populate_text_props(const Eina_Unicode *text,
 EAPI Eina_Bool
 evas_common_font_ot_update_text_props(const Eina_Unicode *text,
       Evas_Text_Props *props, size_t len, int pos, Evas_Text_Props_Mode mode);
+
+EAPI Eina_Bool
+evas_common_font_ot_hard_split_text_props(const Eina_Unicode *text,
+      Evas_Text_Props *props1, size_t len, int pos, Evas_Text_Props *props2, Evas_Text_Props_Mode mode);
 #endif
 

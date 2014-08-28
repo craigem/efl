@@ -5211,9 +5211,138 @@ _update_items_with_same_info(Evas_Object_Textblock_Paragraph *par,
 
 }
 
+/* Updates items that are merged to it so their info is update to be the same
+ * as it's (it's info has been changed) */
+static void
+_merge_items_change_info(Evas_Object_Textblock_Paragraph *par,
+      Evas_Object_Textblock_Text_Item *it, int goff, int toff)
+{
+   Eina_List *items, *i;
+   Evas_Object_Textblock_Item *itr;
+   Evas_Text_Props_Info* info = it->text_props.info;
+
+   /* First, go update all split items that follow 'it' i.e. items that have the
+    * same glyph information */
+   items = eina_list_data_find_list(par->logical_items, it)->next;
+   EINA_LIST_FOREACH(items, i, itr)
+     {
+        /* check if we've gone through all split items */
+        if (!itr->merge)
+           break;
+        Evas_Object_Textblock_Text_Item *ti;
+        if (itr->type == EVAS_TEXTBLOCK_ITEM_TEXT)
+          {
+             ti = _ITEM_TEXT(itr);
+             ti->text_props.info = info;
+             ti->text_props.start -= goff;
+             ti->text_props.text_offset -= toff;
+          }
+     }
+}
+
+typedef struct _Font_Run
+{
+   Evas_Object_Textblock_Format *fmt;
+   Evas_Font_Instance *fi;
+   int run_len;
+   int pos;
+   Evas_Script_Type script;
+} Font_Run;
+
+/* variation of _layout_text_append, but without queuing. Return list of font
+ * runs. So it is processed later to create text items. Don't forget to free
+ * after use. */
+static Eina_List *
+_layout_text_font_runs_get(Ctxt *c, Evas_Object_Textblock_Format *fmt, const Eina_Unicode *_str, int start, int off, const char *repch)
+{
+   const Eina_Unicode *str = _str;
+   const Eina_Unicode *tbase;
+   size_t cur_len = 0;
+   Eina_Unicode urepch = 0;
+
+   Eina_List *font_runs = NULL;
+
+   /* Figure out if we want to bail, work with an empty string,
+    * or continue with a slice of the passed string */
+   /* If we work with a replacement char, create a string which is the same
+    * but with replacement chars instead of regular chars. */
+   if (fmt->password && repch && off)
+     {
+        int i, ind;
+        Eina_Unicode *ptr;
+
+        tbase = str = ptr = alloca((off + 1) * sizeof(Eina_Unicode));
+        ind = 0;
+        urepch = eina_unicode_utf8_next_get(repch, &ind);
+        for (i = 0 ; i < off; ptr++, i++)
+           *ptr = urepch;
+        *ptr = 0;
+     }
+   /* Use the string, just cut the relevant parts */
+   else
+     {
+        str = _str + start;
+     }
+
+   cur_len = off;
+
+   tbase = str;
+
+   while (cur_len > 0)
+     {
+        Evas_Font_Instance *script_fi = NULL;
+        int script_len, tmp_cut;
+        Evas_Script_Type script;
+
+        script_len = cur_len;
+
+        tmp_cut = evas_common_language_script_end_of_run_get(str,
+              c->par->bidi_props, start + str - tbase, script_len);
+        if (tmp_cut > 0)
+          {
+             script_len = tmp_cut;
+          }
+        cur_len -= script_len;
+
+        script = evas_common_language_script_type_get(str, script_len);
+
+        Evas_Object_Protected_Data *obj = eo_data_scope_get(c->obj, EVAS_OBJECT_CLASS);
+        while (script_len > 0)
+          {
+             Evas_Font_Instance *cur_fi = NULL;
+             int run_len = script_len;
+             Font_Run *fr;
+
+             fr = malloc(sizeof(Font_Run));
+             fr->fmt = fmt;
+             fr->pos = start + str - tbase;
+             fr->fi = NULL;
+             fr->script = script;
+
+             if (fmt->font.font)
+               {
+                  fr->run_len = run_len = ENFN->font_run_end_get(ENDT,
+                        fmt->font.font, &script_fi, &cur_fi,
+                        script, str, script_len);
+               }
+
+             if (cur_fi)
+               {
+                  fr->fi = cur_fi;
+               }
+
+             font_runs = eina_list_append(font_runs, fr);
+
+             str += run_len;
+             script_len -= run_len;
+          }
+     }
+   return font_runs;
+}
+
 /* Inserts new dirty information */
 static void
-_dirty_info_append(Evas_Object_Textblock_Node_Text *n, size_t pos, size_t len)
+_dirty_info_append(Evas_Object_Textblock_Node_Text *n, size_t pos, int len)
 {
    Evas_Object_Textblock_Dirty_Info *info =
       malloc(sizeof(Evas_Object_Textblock_Dirty_Info));
@@ -5235,15 +5364,208 @@ _dirty_info_free(Evas_Object_Textblock_Node_Text *n)
    n->dirty_info = NULL;
 }
 
+/* Givem two soft-split items, does a hard split.
+ * Soft-split means that the items were once a single item, that was split (like
+ * in the case of wrapping). A hard-split also splits their text info, so the
+ * output it two completely individual items.
+ */
+static void
+_layout_text_unmerge(Evas_Object_Textblock_Paragraph *par,
+      Evas_Object_Textblock_Text_Item *it1,
+      Evas_Object_Textblock_Text_Item *it2)
+{
+   int start, toff;
+   if (!it2->parent.merge)
+     {
+        ERR("Can't hard-split: merge == FALSE\n");
+     }
+   start = it2->text_props.start;
+   toff = it2->text_props.text_offset;
+   evas_common_text_props_unmerge(&it1->text_props, &it2->text_props);
+   it2->parent.merge = EINA_FALSE;
+   _merge_items_change_info(par, it2, start, toff);
+}
+
+static void
+_layout_text_update_text_pos(Eina_List *list, int off)
+{
+   Eina_List *i;
+   Evas_Object_Textblock_Item *it;
+
+   EINA_LIST_FOREACH(list, i, it)
+     {
+        it->text_pos += off;
+     }
+}
+
+/* Splits the item to two entirely different items, given offset */
+static inline Evas_Object_Textblock_Text_Item *
+_layout_text_hard_split(Ctxt *c, Eina_List *list, Evas_Object_Textblock_Text_Item *ti,
+      size_t off, const Eina_Unicode *text, size_t len)
+{
+   Eina_List *next;
+   Evas_Object_Textblock_Item *it;
+   Evas_Object_Textblock_Text_Item *new_ti;
+   new_ti = _layout_text_item_new(c, ti->parent.format);
+
+   if ((next = eina_list_next(list)))
+     {
+        it = eina_list_data_get(next);
+        if (it->merge) //this means that it's also a text item
+          {
+             new_ti->text_props.info = _ITEM_TEXT(it)->text_props.info;
+          }
+     }
+   evas_common_text_props_hard_split(&ti->text_props, &new_ti->text_props, text,
+         len, off, EVAS_TEXT_PROPS_MODE_SHAPE);
+   c->par->logical_items = eina_list_append_relative_list(c->par->logical_items, new_ti, list);
+   return NULL;
+}
+
+/**
+ * @internal
+ *  Updates the text item. Might create more than one item and also breka it down
+ *  in case a new script has been added.
+ *  @param c the context
+ *  @param str the string
+ *  @param ti the text item
+ */
+static inline void
+_layout_pre_text_item_update(Ctxt *c, Evas_Object_Textblock_Text_Item *ti,
+      Evas_Object_Textblock_Node_Text *n, int len)
+{
+   /* Create items from the given text range (str, len). */
+   /* get that string in the text node matching the item */
+   Eina_Unicode *str = eina_unicode_strdup(
+         eina_ustrbuf_string_get(n->unicode));
+   int text_len = eina_ustrbuf_length_get(n->unicode);
+   Font_Run *run;
+
+   Eina_List *font_runs, *last, *i;
+   Eina_Bool was_hard_split;
+
+   Evas_Object_Protected_Data *obj = eo_data_scope_get(c->obj, EVAS_OBJECT_CLASS);
+
+   font_runs = _layout_text_font_runs_get(c, ti->parent.format, str, ti->text_props.text_offset, len, c->o->repch);
+   /* First, check if there is only one font run. Its script and font instance
+    * should be the same as the original item's */
+   if (eina_list_count(font_runs) == 1)
+     {
+        int prev_len = ti->text_props.len;
+        int prev_tlen = ti->text_props.text_len;
+        int diff, difft;
+
+        run = eina_list_data_get(font_runs);
+        ENFN->font_text_props_info_update(ENDT,
+              run->fi, str, &ti->text_props,
+              ti->text_props.text_offset, len, EVAS_TEXT_PROPS_MODE_SHAPE);
+
+        diff = ti->text_props.len - prev_len;
+        difft = ti->text_props.text_len - prev_tlen;
+        /* update indices for next items that share the same glyph info */
+        _update_items_with_same_info(c->par, &ti->parent, diff, difft);
+        _text_item_update_sizes(c, ti);
+
+        return;
+     }
+
+   Eina_List *list = eina_list_data_find_list(c->par->logical_items, ti);
+   /* Case: first run has different script/font_instance than item's original */
+   run = eina_list_data_get(font_runs);
+   if ((ti->text_props.script != run->script) ||
+         (ti->text_props.font_instance != run->fi))
+     {
+        Evas_Object_Textblock_Text_Item *new_ti;
+
+        /*TODO: check if it has 'merge' property, and if so,
+         * call for unmerge with the previous item */
+        if (ti->parent.merge)
+          {
+             /* call for hard_split */
+             Eina_List *prev = eina_list_prev(list); //should exists because merge is true
+             Evas_Object_Textblock_Text_Item *prev_ti = eina_list_data_get(prev);
+
+             _layout_text_unmerge(c->par, prev_ti, ti);
+          }
+
+        /* Create a new text item and prepend it to current text item */
+        new_ti = _layout_text_item_new(c, ti->parent.format);
+        new_ti->parent.text_node = n;
+        new_ti->parent.text_pos = ti->parent.text_pos;
+
+        evas_common_text_props_bidi_set(&new_ti->text_props,
+              c->par->bidi_props, new_ti->parent.text_pos);
+        evas_common_text_props_script_set(&new_ti->text_props, run->script);
+
+        if (run->fi)
+          {
+             ENFN->font_text_props_info_create(ENDT,
+                   run->fi, str + run->pos, &new_ti->text_props, c->par->bidi_props,
+                   new_ti->parent.text_pos, run->run_len, EVAS_TEXT_PROPS_MODE_SHAPE);
+          }
+        _layout_text_append_add_logical_item(c, new_ti, list);
+        _layout_text_update_text_pos(list, run->run_len);
+
+     }
+
+   font_runs = eina_list_remove_list(font_runs, font_runs); //remove first font run
+   free(run);
+
+   /* Case: handle runs after first run.
+    * TODO: this is not done yet */
+   last = eina_list_last(font_runs);
+   for (i = font_runs; i; i = eina_list_next(i))
+     {
+        Evas_Object_Textblock_Text_Item *new_ti;
+        run = eina_list_data_get(i);
+
+        if ((run->script != ti->text_props.script) ||
+              (run->fi != ti->text_props.font_instance))
+          {
+             /* TODO: Different, so going to have to hard-split current item at run's
+              * position, and put a new item between the split parts */
+             if (!was_hard_split)
+               {
+                  _layout_text_hard_split(c, list, ti, run->pos, str, text_len);
+                  was_hard_split = EINA_TRUE;
+               }
+          }
+        new_ti = _layout_text_item_new(c, ti->parent.format);
+        if (run->fi)
+          {
+             ENFN->font_text_props_info_create(ENDT,
+                   run->fi, str + run->pos, &new_ti->text_props, c->par->bidi_props,
+                   new_ti->parent.text_pos, run->run_len, EVAS_TEXT_PROPS_MODE_SHAPE);
+          }
+        c->par->logical_items =
+           eina_list_append_relative_list(c->par->logical_items, new_ti, list);
+
+        /* all other items from runs should be appended after the appended item */
+        list = eina_list_next(list);
+
+        i = eina_list_remove_list(i, i);
+
+        free(run);
+     }
+
+   /* TODO: Check last font run - if it has differnt script/font than the original,
+    * then do hard-split */
+
+   EINA_LIST_FREE(font_runs, run)
+     {
+        free(run);
+     }
+
+   free(str);
+
+}
+
 /* updates text item corresponsing to position off in n */
-static Eina_Bool
+static inline Eina_Bool
 _layout_pre_text_update(Ctxt *c, Evas_Object_Textblock_Node_Text *n)
 {
-   Eina_Unicode *str;
-   Evas_Object_Protected_Data *obj = eo_data_scope_get(c->obj, EVAS_OBJECT_CLASS);
    Evas_Object_Textblock_Item *it;
    Evas_Object_Textblock_Text_Item *ti = NULL;
-   int prev_glen;
    Evas_Object_Textblock_Dirty_Info *info;
 
    EINA_LIST_FREE(n->dirty_info, info)
@@ -5261,35 +5583,9 @@ _layout_pre_text_update(Ctxt *c, Evas_Object_Textblock_Node_Text *n)
         //Otherwise, handle other cases
         ti = _ITEM_TEXT(it);
 
-        /* Should not happen, but let's leave it for the meantime */
-        if (!ti->text_props.font_instance)
-           goto error;
-
-        /* get that string in the text node matching the item */
-        str = eina_unicode_strdup(
-              eina_ustrbuf_string_get(n->unicode));
-
-        prev_glen = ti->text_props.len;
-        /* Update the affected item's glyph information */
-        ENFN->font_text_props_info_update(ENDT,
-              ti->text_props.font_instance, str, &ti->text_props,
-              ti->text_props.text_offset, info->len, EVAS_TEXT_PROPS_MODE_SHAPE);
-
-        free(str);
-
-        /* update indices for next items that share the same glyph info */
-        _update_items_with_same_info(c->par, it, ti->text_props.len - prev_glen,
-              info->len);
-
-        _text_item_update_sizes(c, ti);
+        _layout_pre_text_item_update(c, ti, n, info->len + ti->text_props.text_len);
      }
    return EINA_TRUE;
-
-error:
-   /* Again, code should not reach here, but adding this until it is
-    * stable enough */
-   _dirty_info_free(n);
-   return EINA_FALSE;
 }
 
 
